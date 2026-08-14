@@ -1,0 +1,37 @@
+# Pin the target. Deleting sdkconfig silently reverts to plain esp32 and the
+# build succeeds - producing an image for the wrong chip.
+CONFIG_IDF_TARGET="esp32s3"
+
+# Waveshare Industrial ESP32-S3 RS485/CAN control board.
+# Console goes over the native USB-Serial-JTAG (the USB-C port that enumerates
+# as VID 303A / PID 1001), not UART0 - UART0's pins aren't broken out usefully
+# and UART1 is committed to RS485.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# 16 MB flash. PSRAM is deliberately left OFF: the chip reports 8 MB embedded
+# PSRAM, but enabling it with the wrong mode (quad vs octal) fails at boot, and
+# a Modbus poller needs none of it. Turn it on later only if something needs it.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# HTTPS API. The cert is EC P-256 rather than RSA - the TLS handshake is far
+# cheaper on this chip and every client we care about supports it.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Rollback protection. A new image boots in PENDING_VERIFY; if it does not call
+# esp_ota_mark_app_valid_cancel_rollback() the bootloader reverts to the
+# previous slot on the next reset. This is the only safety net once the board
+# is at the furnace with no USB - without it, one bad OTA is a site visit.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Make the task watchdog actually reboot instead of just printing a warning.
+# Default is warn-only, which on a board with no USB means a starved or
+# deadlocked task hangs forever with nobody to read the warning. This is the
+# low-level backstop; supervisor.c is the application-level one.
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512

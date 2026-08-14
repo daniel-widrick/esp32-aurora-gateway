@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Aurora Gateway</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --fg:#16181d; --muted:#6b7280; --line:#e3e6ea;
+  --ok:#0a7d33; --warn:#a15c00; --bad:#b3261e; --accent:#1a4fa0;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#111317; --card:#191c22; --fg:#e8eaed; --muted:#9aa1ab; --line:#2a2f38;
+         --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#7aa7f0; }
+}
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:var(--bg);color:var(--fg);
+  font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:760px;margin:0 auto}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+h1{font-size:19px;margin:0;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:12.5px}
+.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;
+  border:1px solid transparent}
+.pill.ok{color:var(--ok);border-color:var(--ok)}
+.pill.warn{color:var(--warn);border-color:var(--warn)}
+.pill.bad{color:var(--bad);border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:14px}
+.card h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+  margin:0 0 10px;font-weight:600}
+.grid{display:grid;gap:10px 18px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.metric .label{font-size:12px;color:var(--muted)}
+.metric .value{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.metric .value small{font-size:12px;font-weight:500;color:var(--muted);margin-left:2px}
+.na{color:var(--muted);font-weight:500}
+.zone{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:9px 0;border-bottom:1px solid var(--line)}
+.zone:last-child{border-bottom:0}
+.zone .t{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+.zone .sp{font-size:12.5px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.fault{font-size:16px;font-weight:600}
+.kv{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:3px 0}
+.kv span:first-child{color:var(--muted)}
+.kv span:last-child{font-variant-numeric:tabular-nums}
+footer{margin:18px 0 4px;color:var(--muted);font-size:12px;text-align:center}
+.err{border-color:var(--bad)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Aurora Gateway</h1>
+    <span id="pill" class="pill warn">connecting…</span>
+  </header>
+  <div class="sub" id="sub">&nbsp;</div>
+
+  <div class="card" id="zonecard">
+    <h2>Zones</h2>
+    <div id="zones"><span class="na">—</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Loop &amp; refrigerant</h2>
+    <div class="grid" id="loop"></div>
+  </div>
+
+  <div class="card" id="faultcard">
+    <h2>Fault status</h2>
+    <div class="fault" id="fault">—</div>
+  </div>
+
+  <div class="card">
+    <h2>Device</h2>
+    <div id="device"></div>
+  </div>
+
+  <footer>Read-only view · refreshes every 5s · control requires an API key</footer>
+</div>
+
+<script>
+// Aurora E-code table, recovered from the controller UI. Register 25 holds the
+// code in its low 15 bits; bit 15 is a hard lockout.
+const FAULTS={"1":"Input Error","2":"High Pressure","3":"Low Pressure","4":"Frze Detect FP2","5":"Frze Detect FP1","7":"Condensate","8":"O/U Voltage","9":"Airflow/RPM","10":"Comp Monitor","11":"FP1/2 Snr Err","12":"RefrigPerformnc","13":"NCritAxbSnrErr","14":"CritAxbSnrErr","15":"Hot Water Limit","16":"VS Pump Error","18":"NCritComm Error","19":"Crit Comm Error","22":"Comm ECM Error","25":"AXB EEV Error","26":"EntSrcLowLimAlm","27":"EntSrcHiLimAlm","28":"LvgSrcLowLimAlm","29":"LvgSrcHiLimAlm","31":"Src Flow Fault","32":"Load Flow Fault","41":"Hi Drive Temp","42":"Hi Dischrg Temp","43":"Lo Suct Press","44":"Lo Cond Press","45":"Hi Cond Press","46":"Output Pwr Lmt","47":"EEV ID Comm Err","48":"EEV OD Comm Err","49":"Cabinet Tmp Snr","51":"Dischrg Tmp Snr","52":"Suct Press Snr","53":"Cond Press Snr","54":"Lo Supply Volt","55":"Out of Envelope","56":"Drv Over Current","57":"Drive O/U Volt","58":"Hi Drive Temp","59":"Int Drive Error","61":"Multiple SafeMd","62":"Low Temp","63":"Fault Limit","64":"EVC Intrnl Flt","65":"Soft Start Fail","66":"Power Fault","67":"EVC Intrnl Flt","69":"Invalid Comp Id","71":"Loss of Charge","72":"Suct Temp Snr","73":"LvgAir Temp Snr","74":"Max Op Pressure","75":"Loss of Charge","76":"Suct Temp Snr","77":"LvgAir Temp Snr","78":"Max Op Pressure","99":"System Reset"};
+
+const $=id=>document.getElementById(id);
+
+// A null reading means the sensor is not fitted on this unit (the ABC reports
+// -999.9). Show it as absent rather than inventing a number.
+function val(v,unit,digits){
+  if(v===null||v===undefined) return '<span class="na">—</span>';
+  const n=(typeof v==='number')?v.toFixed(digits===undefined?1:digits):v;
+  return n+(unit?'<small>'+unit+'</small>':'');
+}
+function metric(label,v,unit,digits){
+  return '<div class="metric"><div class="label">'+label+'</div>'+
+         '<div class="value">'+val(v,unit,digits)+'</div></div>';
+}
+function dur(s){
+  if(s===null||s===undefined) return '—';
+  s=Math.floor(s);
+  const d=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60);
+  if(d) return d+'d '+h+'h';
+  if(h) return h+'h '+m+'m';
+  if(m) return m+'m '+(s%60)+'s';
+  return s+'s';
+}
+function kv(k,v){ return '<div class="kv"><span>'+k+'</span><span>'+v+'</span></div>'; }
+
+async function tick(){
+  let health=null, status=null, err=null;
+  try{
+    const [hr,sr]=await Promise.all([fetch('/api/health'),fetch('/api/status')]);
+    health=hr.ok?await hr.json():null;
+    status=sr.ok?await sr.json():null;
+    if(!health) err='health unavailable';
+    else if(!status) err='no furnace data yet';
+  }catch(e){ err='gateway unreachable'; }
+
+  const pill=$('pill');
+  if(err&&!health){
+    pill.className='pill bad'; pill.textContent=err;
+  }else if(health){
+    const degraded=health.status!=='ok';
+    pill.className='pill '+(degraded?'warn':'ok');
+    pill.textContent=degraded?'degraded':'ok';
+  }
+
+  if(health){
+    $('sub').textContent='v'+health.version+' · '+health.wifi.ip+
+      ' · '+health.wifi.rssi_dbm+' dBm · up '+dur(health.uptime_s);
+  }
+
+  // Zones
+  if(status&&status.zones&&status.zones.length){
+    $('zones').innerHTML=status.zones.map(z=>
+      '<div class="zone"><div><div class="label" style="font-size:12px;color:var(--muted)">Zone '+z.zone+'</div>'+
+      '<div class="t">'+val(z.temp_f,'°F')+'</div></div>'+
+      '<div class="sp">heat '+z.heat_sp_f+'°F<br>cool '+z.cool_sp_f+'°F</div></div>').join('');
+  }else{
+    $('zones').innerHTML='<span class="na">'+(err||'no zone data')+'</span>';
+  }
+
+  // Loop
+  if(status&&status.loop){
+    const l=status.loop;
+    $('loop').innerHTML=
+      metric('Entering water',l.entering_water_f,'°F')+
+      metric('Leaving water',l.leaving_water_f,'°F')+
+      metric('FP1 source',l.fp1_f,'°F')+
+      metric('FP2 load',l.fp2_f,'°F')+
+      metric('Loop pump',l.pump_output_pct,'%',0)+
+      metric('Discharge',l.discharge_psi,' psi')+
+      metric('Leaving air',l.leaving_air_f,'°F')+
+      metric('Compressor amb.',l.compressor_ambient_f,'°F');
+  }
+
+  // Fault
+  const fc=$('faultcard'), fe=$('fault');
+  if(status&&status.fault&&status.fault.code!==null&&status.fault.code!==undefined){
+    const c=status.fault.code;
+    if(c===0){ fe.innerHTML='<span style="color:var(--ok)">No fault</span>'; fc.classList.remove('err'); }
+    else{
+      const name=FAULTS[String(c)]||'Unknown code';
+      const lock=status.fault.lockout;
+      fe.innerHTML='<span style="color:var(--'+(lock?'bad':'warn')+')">E'+c+' · '+name+'</span>'+
+        (lock?' <span class="pill bad">LOCKOUT</span>':
+              ' <span class="sub">(not a lockout)</span>');
+      fc.classList.toggle('err',!!lock);
+    }
+  }else{ fe.innerHTML='<span class="na">—</span>'; }
+
+  // Device
+  if(health){
+    const b=health.bus,m=health.memory,d=health.diag;
+    $('device').innerHTML=
+      kv('Bus polling',b.polling_enabled?'enabled':'suspended (silent)')+
+      kv('Polls ok / failed',b.polls_ok+' / '+b.polls_failed)+
+      kv('Last poll',b.last_poll_age_s===null?'never':b.last_poll_age_s.toFixed(1)+'s ago')+
+      (status?kv('Data age',status.age_s.toFixed(1)+'s'):'')+
+      kv('Free heap',(m.free_heap/1024).toFixed(1)+' KiB (min '+(m.free_heap_min/1024).toFixed(1)+')')+
+      kv('Auth rejections',d.auth_rejections)+
+      kv('ESP-IDF',health.idf);
+  }
+}
+tick();
+setInterval(tick,5000);
+</script>
+</body>
+</html>
