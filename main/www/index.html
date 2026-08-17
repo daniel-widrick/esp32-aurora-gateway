@@ -110,8 +110,12 @@ function kv(k,v){ return '<div class="kv"><span>'+k+'</span><span>'+v+'</span></
 async function tick(){
   let health=null, status=null, err=null;
   try{
-    const [hr,sr]=await Promise.all([fetch('/api/health'),fetch('/api/status')]);
+    /* Sequential, NOT Promise.all: two parallel fetches open two TLS sessions
+       every tick, and the server only has a handful. One at a time lets the
+       connection be reused and halves the handshake load. */
+    const hr=await fetch('/api/health');
     health=hr.ok?await hr.json():null;
+    const sr=await fetch('/api/status');
     status=sr.ok?await sr.json():null;
     if(!health) err='health unavailable';
     else if(!status) err='no furnace data yet';

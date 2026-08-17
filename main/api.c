@@ -478,6 +478,7 @@ static esp_err_t mode_get(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "writes_enabled", settings_writes_enabled());
     cJSON_AddBoolToObject(root, "polling_enabled", poller_is_enabled());
+    cJSON_AddBoolToObject(root, "wifi_debug", wifi_debug_logging());
     return send_json(req, root, HTTPD_200);
 }
 
@@ -508,10 +509,11 @@ static esp_err_t mode_post(httpd_req_t *req)
     }
     cJSON *jw = cJSON_GetObjectItem(in, "writes_enabled");
     cJSON *jp = cJSON_GetObjectItem(in, "polling_enabled");
-    if (!cJSON_IsBool(jw) && !cJSON_IsBool(jp)) {
+    cJSON *jd = cJSON_GetObjectItem(in, "wifi_debug");
+    if (!cJSON_IsBool(jw) && !cJSON_IsBool(jp) && !cJSON_IsBool(jd)) {
         cJSON_Delete(in);
         return send_error(req, "400 Bad Request",
-                          "need writes_enabled and/or polling_enabled (bool)");
+                          "need writes_enabled, polling_enabled and/or wifi_debug (bool)");
     }
 
     esp_err_t err = ESP_OK;
@@ -529,6 +531,12 @@ static esp_err_t mode_post(httpd_req_t *req)
             poller_set_enabled(enable);   /* apply to the running task now */
         }
     }
+    if (cJSON_IsBool(jd)) {
+        /* Runtime only, never persisted - see wifi.h. A reboot always returns
+         * the driver to quiet, so this cannot be left armed by accident on a
+         * board nobody can reach. */
+        wifi_set_debug_logging(cJSON_IsTrue(jd));
+    }
     cJSON_Delete(in);
 
     if (err != ESP_OK) {
@@ -538,6 +546,7 @@ static esp_err_t mode_post(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "writes_enabled", settings_writes_enabled());
     cJSON_AddBoolToObject(root, "polling_enabled", poller_is_enabled());
+    cJSON_AddBoolToObject(root, "wifi_debug", wifi_debug_logging());
     return send_json(req, root, HTTPD_200);
 }
 
@@ -553,11 +562,32 @@ esp_err_t api_start(void)
     conf.httpd.max_uri_handlers = 12;
     conf.httpd.lru_purge_enable = true;
     conf.httpd.stack_size = 10240;
-    /* Short socket timeouts bound slowloris-style attacks: a stalled or
-     * dribbling connection is dropped in ~2 s instead of holding the single
-     * server task for the 5 s default per recv. */
-    conf.httpd.recv_wait_timeout = 2;
-    conf.httpd.send_wait_timeout = 2;
+
+    /*
+     * HTTPD_SSL_CONFIG_DEFAULT allows only 4 concurrent sessions - half the
+     * plain-HTTP default, because each TLS session costs heap. That is not
+     * enough here: www/index.html refreshes every 5 s, and a handshake on this
+     * chip measures 0.9-1.6 s at the furnace, so one dashboard tab plus a
+     * couple of abandoned connections fills the table. Past that,
+     * lru_purge_enable evicts sessions that have finished their handshake but
+     * not yet sent a request, which reaches the client as a connection dropped
+     * with no response - not as any kind of error.
+     *
+     * 7 is the ceiling: httpd requires max_open_sockets + 3 <=
+     * CONFIG_LWIP_MAX_SOCKETS, which defaults to 10. Raising it further means
+     * raising the lwIP limit as well, and paying more heap per session.
+     */
+    conf.httpd.max_open_sockets = 7;
+
+    /*
+     * Short socket timeouts bound slowloris-style attacks. The original 2 s was
+     * tuned on the bench, where a handshake finished in milliseconds; at the
+     * furnace one takes 0.9-1.6 s, which left a legitimate slow client no
+     * margin at all and killed valid requests. 10 s still bounds a stalled
+     * connection while surviving a real WiFi link.
+     */
+    conf.httpd.recv_wait_timeout = 10;
+    conf.httpd.send_wait_timeout = 10;
 
     httpd_handle_t server = NULL;
     esp_err_t err = httpd_ssl_start(&server, &conf);
@@ -573,12 +603,21 @@ esp_err_t api_start(void)
      * credentials needed. Measured before: 79 of 103 buffered lines were the
      * esp_https_server handshake message alone. auth.c already throttles its
      * own rejection lines; this closes the IDF-side paths around it.
+     *
+     * esp_log_level_set matches a tag EXACTLY - it is not a prefix match. The
+     * original list therefore missed the two tags that actually fire on a
+     * failed handshake: "esp-tls-mbedtls" (NOT covered by "esp-tls") and plain
+     * "httpd" (NOT covered by "httpd_uri" and friends). Measured at the
+     * furnace, those two alone turned the whole 6 KB ring over every ~2 min,
+     * which is the exact failure this block exists to prevent.
      */
     esp_log_level_set("esp_https_server", ESP_LOG_NONE);
     esp_log_level_set("httpd_uri", ESP_LOG_NONE);
     esp_log_level_set("httpd_parse", ESP_LOG_NONE);
     esp_log_level_set("httpd_txrx", ESP_LOG_NONE);
     esp_log_level_set("esp-tls", ESP_LOG_NONE);
+    esp_log_level_set("esp-tls-mbedtls", ESP_LOG_NONE);
+    esp_log_level_set("httpd", ESP_LOG_NONE);
 
     static const httpd_uri_t routes[] = {
         { .uri = "/",               .method = HTTP_GET,  .handler = root_get },

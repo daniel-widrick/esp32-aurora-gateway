@@ -35,3 +35,28 @@ CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_HTTPS_SERVER_ENABLE=y
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 CONFIG_HTTPD_MAX_URI_LEN=512
+
+# Disable 802.11n frame aggregation.
+#
+# The UniFi APs here (OUI 68:d7:9a) and this ESP32-S3 cannot hold a block-ack
+# session together: the console showed "[ADDBA] RX DELBA, reason:39" (timeout)
+# on a ~2 minute cycle, and while that was happening BROADCAST traffic worked
+# (DHCP got a lease, ARP resolved) but every UNICAST packet was dropped. The
+# board looked perfectly healthy - associated at -47 dBm, RS-485 polling with
+# zero errors - and was completely unreachable.
+#
+# Measured on one AP, same board, minutes apart:
+#   AMPDU on  : 0/10 HTTP, 100% ICMP loss, endless reason 2/205 disconnects
+#   AMPDU off : 10/10 HTTP at 18-26 ms, 0% ICMP loss, zero disconnects, zero DELBA
+#
+# Costs throughput this gateway will never miss - it moves a few dozen 16-bit
+# registers per poll. Removing this brings back an unreachable board.
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+
+# Compile VERBOSE log statements in so the WiFi driver blob can emit its
+# block-ack (ADDBA/DELBA) logging - esp_wifi_init() takes the driver's log level
+# from this symbol. The RUNTIME default level stays INFO, and wifi.c knocks the
+# driver back to INFO immediately after init, so nothing is noisy by default.
+# Enable on demand: POST {"wifi_debug":true} to /api/mode.
+CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
